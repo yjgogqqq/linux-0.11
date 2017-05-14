@@ -22,16 +22,16 @@ SYSSIZE = 0x3000
 ! read errors will result in a unbreakable loop. Reboot by hand. It
 ! loads pretty fast by getting whole sectors at a time whenever possible.
 
-.globl begtext, begdata, begbss, endtext, enddata, endbss  !声明XXX是全局可见的。
-.text							!代码段声明; .text 是只读的代码区
+.globl begtext, begdata, begbss, endtext, enddata, endbss  //声明XXX是全局可见的。
+.text
 begtext:
-.data							!伪指令,数据段定义;.data 是可读可写的数据区
+.data
 begdata:
-.bss							!.bss 则是可读可写且没有初始化的数据区。
+.bss
 begbss:
 .text
 
-SETUPLEN = 4				! nr of setup-sectors;  setup 程序的扇区数(setup-sectors)值；
+SETUPLEN = 4				! nr of setup-sectors
 BOOTSEG  = 0x07c0			! original address of boot-sector
 INITSEG  = 0x9000			! we move boot here - out of the way
 SETUPSEG = 0x9020			! setup starts here
