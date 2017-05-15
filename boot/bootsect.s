@@ -31,46 +31,91 @@ begdata:
 begbss:
 .text
 
-SETUPLEN = 4				! nr of setup-sectors;  setup 程序的扇区数(setup-sectors)值；
-BOOTSEG  = 0x07c0			! original address of boot-sector
+SETUPLEN = 4				! nr of setup-sectors;  要加载的setup 程序的扇区数(setup-sectors)值；
+BOOTSEG  = 0x07c0			! original address of boot-sector； 启动扇区被BIOS加载的位置
 INITSEG  = 0x9000			! we move boot here - out of the way
-SETUPSEG = 0x9020			! setup starts here
+SETUPSEG = 0x9020			! setup starts here；setup程序被加载到的位置；
 SYSSEG   = 0x1000			! system loaded at 0x10000 (65536).
 ENDSEG   = SYSSEG + SYSSIZE		! where to stop loading
 
-! ROOT_DEV:	0x000 - same type of floppy as boot.
+! ROOT_DEV:	根文件系统设备号
+!		0x000 - same type of floppy as boot.
 !		0x301 - first partition on first drive etc
-ROOT_DEV = 0x306
+ROOT_DEV = 0x306			!指定根文件系统设备是第2个硬盘的第1个分区。
+			 		! 这是Linux 老式的硬盘命名方式,具体值的含义如下： 
+			                ! 设备号=主设备号*256 + 次设备号（也即dev_no = (major<<8) + minor ） 
+			                ! （主设备号：1-内存,2-磁盘,3-硬盘,4-ttyx,5-tty,6-并行口,7-非命名管道） 
+			                ! 0x300 - /dev/hd0 - 代表整个第1个硬盘； 
+			                ! 0x301 - /dev/hd1 - 第1个盘的第1个分区； 
+			                ! … 
+			                ! 0x304 - /dev/hd4 - 第1个盘的第4个分区； 
+			                ! 0x305 - /dev/hd5 - 代表整个第2个硬盘盘； 
+			                ! 0x306 - /dev/hd6 - 第2个盘的第1个分区； 
+			                ! … 
+			                ! 0x309 - /dev/hd9 - 第2个盘的第4个分区； 
+			                ! 从linux 内核0.95 版后已经使用与现在相同的命名方法了。
+			                ! 注意tools/build会根据Makefile的ROOT_DEV设置
+			                !（没有设置的话用DEFAULT_MAJOR_ROOT/DEFAULT_MINOR_ROOT缺省值,修改编译好的bootsect中的root_dev数据)
+			                ! build.c中定义的缺省值为0x21d，即1.44MB软驱B
+					! vb 0x0000:0x7c00
 
-entry start
+entry start				!! 告知连接程序，程序从start 标号开始执行。
 start:
 	mov	ax,#BOOTSEG
-	mov	ds,ax
+	mov	ds,ax			!查看《微型计算机原理与接口技术》中关于段的定义；
 	mov	ax,#INITSEG
 	mov	es,ax
-	mov	cx,#256
-	sub	si,si
-	sub	di,di
-	rep
-	movw
-	jmpi	go,INITSEG
-go:	mov	ax,cs
+	mov	cx,#256			!用于下面程序中rep;提供了需要复制的“字”数，256个字正好是512字节		计数寄存器
+
+	！通常用mov ,add ,sub 等指令时，用si,di寻址是一样的，都默认与DS搭配（除非明确指定与ES等来组合）来寻址。
+	！但遇到块移动、块比较等块操作指令时，SI，DI的源和目的特征就表现出来了，默认情况下，SI与DS搭配，DI与ES搭配来寻址。
+	！这些指令有一个比较突出的特点，通常都有rep前缀。详见 cmps、 cmpsb、 cmpsd、 cmpsw、 ins、 insb、 insd、 insw、 lods、
+	！lodsb、 lodsd、 lodsw、 movs、 movsb、 movsd、 movsw、 outs、 outsb、 outsd、 outsw、 stos、 stosb、 stosd、 stosw 、
+	！scas scasb scasd scasw 等指令的用法。
+	sub	si,si			!DS(0x07C0)和SI(0x0000)联合使用，构成了源地址 ds:si = 0×07C0:0×0000
+	sub	di,di			!ES(0x9000)和DI(0x0000)联合使用，构成了目的地址 es:di = 0×9000:0×0000
+	rep				!rep是字符串操作指令MOVS,CMPS等的前缀,在CX不等于0的情况下,对字符串执行重复操作. 
+	movw				!移动1 个字；
+	!由于“两头约定”和“定位识别”的作用，所以bootsect在开始时“被迫”加载到0x07c00位置。
+	!现在将其自身移至0x90000处，说明操作系统开始根据自己的需要安排内存了。
+	jmpi	go,INITSEG		!jmpi为段间跳转指令
+ 					!执行这条指令之后
+ 					!CS = INITSEG
+ 					!IP = go
+ 					!也就是跳转到地址 INITSEG : go
+					!间接跳转。这里INITSEG 指出跳转到的段地址，再加上go：标识的偏移地址，是执行新位置的go：标识程序；
+!Linux的设计意图是跳转之后在新位置接着执行后面的mov ax,cs，而不是死循环。jmpi go,INITSEG与go:mov ax,cs配合，
+!巧妙地实现了“到新位置后接着原来的执行程序继续执行下去”的目的。
+go:	mov	ax,cs			
+	!将ds、es 和ss 都置成移动后代码所在的段处(0×9000)。
 	mov	ds,ax
 	mov	es,ax
 ! put stack at 0x9ff00.
-	mov	ss,ax
-	mov	sp,#0xFF00		! arbitrary value >>512
+!这里对SS和SP进行的设置是分水岭。它标志着从现在开始，程序可以执行更为复杂一些的数据运算类指令了。
+	mov	ss,ax			!BP和SP寄存器称为指针寄存器，与SS联用，为访问现行堆栈段提供方便
+	mov	sp,#0xFF00		!arbitrary value >>512
+! 栈表示stack，特指在C语言程序的运行时结构中，以“后进先出”机制运作的内存空间；
+! 堆表示heap，特指用c语言库函数malloc创建、free释放的动态内存空间。
 
 ! load the setup-sectors directly after the bootblock.
 ! Note that 'es' is already set up.
+! 加载setup这个程序，要借助BIOS提供的int 0x13中断向量所指向的中断服务程序（也就是磁盘服务程序）来完成。
+! 使用int 0x13中断时，就要事先将指定的扇区和加载的内存位置等信息传递给服务程序，即传参；
+!0x13是BIOS读磁盘扇区的中断: ah=0x02-读磁盘，al=扇区数量(SETUPLEN=4)，
+!ch=柱面号，cl=开始扇区，dh=磁头号，dl=驱动器号，es:bx=内存地址
+!读取4个扇区的数据接着在bootsect后面存放，可以看到ex:bx组成的地址刚好是boot后面的第一个字节。
 
 load_setup:
+	! 4个mov指令给bios中断服务程序传参，传参是通过几个通用寄存器实现的，这是汇编程序的常用方法。
+	! 参数传递完毕后，执行int 0x13指令，产生0x13中断，通过中断向量表找到这个中断服务程序，
+	! 将软盘从第2扇区开始的4个扇区,即setup.s对应的程序加载至内存的SETUPSEG(0X90200)处。
+	! 0x90200紧挨着bootsect的尾端，所以bootsect和setup是连在一起的。
 	mov	dx,#0x0000		! drive 0, head 0
 	mov	cx,#0x0002		! sector 2, track 0
 	mov	bx,#0x0200		! address = 512, in INITSEG
-	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors
+	mov	ax,#0x0200+SETUPLEN	! service 2, nr of sectors(the number of sectors)
 	int	0x13			! read it
-	jnc	ok_load_setup		! ok - continue
+	jnc	ok_load_setup		! ok - continue		jnc指令用于对进位位进行判断从而决定程序走向。
 	mov	dx,#0x0000
 	mov	ax,#0x0000		! reset the diskette
 	int	0x13
@@ -79,8 +124,21 @@ load_setup:
 ok_load_setup:
 
 ! Get disk drive parameters, specifically nr of sectors/track
-
-	mov	dl,#0x00
+!调用BIOS中断:ah=0x08,int 0x13得到磁盘驱动器参数。
+!中断调用ah=0x08,int 0x13返回后，在以下寄存器返回以下信息:
+!DL:本机软盘驱动器的数目 
+!DH:最大磁头号（或说磁面数目）。0表示有1个磁面，1表示有2个磁面 
+!CH:存放10位磁道柱面数的低8位（高2位在CL的D7、D6中）。1表示有1个柱面，2表示有2个柱面，依次类推。 
+!CL:0~5位存放每磁道的扇区数目。6和7位表示10位磁道柱面数的高2位。 
+!AX=0 
+!BH=0 
+!BL表示驱动器类型： 
+!1=360K 5.25 
+!2=1.2M 5.25 
+!3=720K 3.5 
+!4=1.44M 3.5 
+!ES:SI 指向软盘参数表 
+	mov	dl,#0x00		! DL驱动器序号, 第一个软驱为0, 第一个硬盘为0x80
 	mov	ax,#0x0800		! AH=8 is get drive parameters
 	int	0x13
 	mov	ch,#0x00
