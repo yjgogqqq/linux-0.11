@@ -30,50 +30,33 @@ begbss:
 entry start
 start:
 
-!BIOS中断类型相关：http://blog.chinaunix.net/uid-27033491-id-3239348.html
-
 ! ok, the read went well so we get current cursor position and save it for
 ! posterity.
 
 	mov	ax,#INITSEG	! this is done in bootsect already, but...
 	mov	ds,ax
 	mov	ah,#0x03	! read cursor pos
-				! 功能描述：在文本坐标下，读取光标各种信息
-				! 入口参数：		AH＝03H
-				! 		BH＝显示页码
-				! 出口参数：		CH＝光标的起始行
-				! 		CL＝光标的终止行
-				!		DH＝行(Y坐标)
-				!		DL＝列(X坐标)
 	xor	bh,bh
-	int	0x10		! 功能调用可以进行屏幕设置。AH中存放功能号，并在指定寄存器中存放入口参数
-				！save it in known place, con_init fetches
+	int	0x10		! save it in known place, con_init fetches
 	mov	[0],dx		! it from 0x90000.
 
 ! Get memory size (extended mem, kB)
 
-	mov	ah,#0x88	! 功能描述：读取扩展内存大小
-				! 入口参数：AH＝88H
-				! 出口参数：AX＝扩展内存字节数(以K为单位)
-				
-	int	0x15		! 杂项系统服务(Miscellaneous System Service——INT 15H) 
+	mov	ah,#0x88
+	int	0x15
 	mov	[2],ax
 
 ! Get video-card data:
 
- 	mov	ah,#0x0f	! 功能描述：读取显示器模式
- 				! 入口参数：		AH＝0FH
- 				! 出口参数：		AH＝屏幕字符的列数
- 				! 		AL＝显示模式(参见功能00H中的说明)
- 				! 		BH＝页码
-	int	0x10		
+	mov	ah,#0x0f
+	int	0x10
 	mov	[4],bx		! bh = display page
 	mov	[6],ax		! al = video mode, ah = window width
 
 ! check for EGA/VGA and some config parameters
 
-	mov	ah,#0x12	! 功能描述：显示器的配置中断。
-	mov	bl,#0x10	! 10H — 读取配置信息
+	mov	ah,#0x12
+	mov	bl,#0x10
 	int	0x10
 	mov	[8],ax
 	mov	[10],bx
@@ -83,32 +66,25 @@ start:
 
 	mov	ax,#0x0000
 	mov	ds,ax
-	lds	si,[4*0x41]			!LDS DI,[BX]指令的功能是把BX所指的32位地址指针的段地址送入DS,偏移地址送入DI.
+	lds	si,[4*0x41]
 	mov	ax,#INITSEG
 	mov	es,ax
 	mov	di,#0x0080
 	mov	cx,#0x10
 	rep
-	movsb					! MOVSB即字符串传送指令，这条指令按字节传送数据。
-						! 通过SI和DI这两个寄存器控制字符串的源地址和目标地址，
-						! 比如DS:SI这段地址的N个字节复制到ES:DI指向的地址，
-						! 复制后DS:SI的内容保持不变。
+	movsb
 
 ! Get hd1 data
 
 	mov	ax,#0x0000
 	mov	ds,ax
-	lds	si,[4*0x46]			!LDS DI,[BX]指令的功能是把BX所指的32位地址指针的段地址送入DS,偏移地址送入DI.
+	lds	si,[4*0x46]
 	mov	ax,#INITSEG
 	mov	es,ax
 	mov	di,#0x0090
 	mov	cx,#0x10
 	rep
-	movsb					! MOVSB即字符串传送指令，这条指令按字节传送数据。
-						! 通过SI和DI这两个寄存器控制字符串的源地址和目标地址，
-						! 比如DS:SI这段地址的N个字节复制到ES:DI指向的地址，
-						! 复制后DS:SI的内容保持不变。
-
+	movsb
 
 ! Check that there IS a hd1 :-)
 
@@ -125,9 +101,7 @@ no_disk1:
 	mov	cx,#0x10
 	mov	ax,#0x00
 	rep
-	stosb					! 该指令为单字符输出指令，调用该指令后，
-						! 可以将累加器AL中的值传递到当前ES段的DI地址处，
-						! 并且根据DF的值来影响DI的值，如果DF为0，则调用该指令后，DI自增1，
+	stosb
 is_disk1:
 
 ! now we want to move to protected mode ...
