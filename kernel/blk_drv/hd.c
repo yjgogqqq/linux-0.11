@@ -134,27 +134,30 @@ int sys_setup(void * BIOS)
 		hd[i*5].nr_sects = 0;
 	}
 	for (drive=0 ; drive<NR_HD ; drive++) {
-		if (!(bh = bread(0x300 + drive*5,0))) {
+		if (!(bh = bread(0x300 + drive*5,0))) {			//0x300+drive*5代表设备号，此时它代表硬盘的设备号；
+														//0代表将要从硬盘上读取第0号逻辑块，即最开始的两个扇区（1KB），
+														//那里存储着硬盘引导块的内容。
 			printk("Unable to read partition table of drive %d\n\r",
 				drive);
 			panic("");
 		}
 		if (bh->b_data[510] != 0x55 || (unsigned char)
-		    bh->b_data[511] != 0xAA) {
+		    bh->b_data[511] != 0xAA) {				//判断硬盘信息有效标志‘55AA’，如果第一个扇区的最后两个字节不是‘55AA’
+		    										//就说明这个扇区中的数据是无效的。
 			printk("Bad partition table on drive %d\n\r",drive);
 			panic("");
 		}
-		p = 0x1BE + (void *)bh->b_data;
+		p = 0x1BE + (void *)bh->b_data;	//利用从引导块中采集到的分区表信息来设置硬盘分区管理结构
 		for (i=1;i<5;i++,p++) {
 			hd[i+5*drive].start_sect = p->start_sect;
 			hd[i+5*drive].nr_sects = p->nr_sects;
 		}
-		brelse(bh);
+		brelse(bh);			//到此，引导块的使命就完成了，调用brelse函数，立即释放其所在的缓冲块，以便以后继续使用
 	}
 	if (NR_HD)
 		printk("Partition table%s ok.\n\r",(NR_HD>1)?"s":"");
-	rd_load();
-	mount_root();
+	rd_load();		//进程1获取软盘超级块，为加载根文件系统做准备
+	mount_root();	//加载根文件系统
 	return (0);
 }
 
@@ -187,7 +190,8 @@ static void hd_out(unsigned int drive,unsigned int nsect,unsigned int sect,
 		panic("Trying to write bad sector");
 	if (!controller_ready())
 		panic("HD controller not ready");
-	do_hd = intr_addr;
+	do_hd = intr_addr;					//将读盘或写盘服务程序与硬盘中断操作程序相挂接
+										//do_hd是_hd_interrupt:处xchgl _do_hd,%edx 这一行代码所描述的内容（kernel/system_call.s）
 	outb_p(hd_info[drive].ctl,HD_CMD);
 	port=HD_DATA;
 	outb_p(hd_info[drive].wpcom>>2,++port);
@@ -262,7 +266,7 @@ static void read_intr(void)
 		do_hd = &read_intr;
 		return;
 	}
-	end_request(1);
+	end_request(1);				//由于此时缓冲块的内容已经全部读出来了，将这个缓冲块的更新标志置1
 	do_hd_request();
 }
 
@@ -299,6 +303,7 @@ void do_hd_request(void)
 	unsigned int nsect;
 
 	INIT_REQUEST;
+	//先通过对当前请求项数据成员的分析，解析出需要操作的磁头、扇区、柱面，以及需要操作多少个扇区，等等
 	dev = MINOR(CURRENT->dev);
 	block = CURRENT->sector;
 	if (dev >= 5*NR_HD || block+2 > hd[dev].nr_sects) {
@@ -313,6 +318,7 @@ void do_hd_request(void)
 		"r" (hd_info[dev].head));
 	sec++;
 	nsect = CURRENT->nr_sectors;
+	//检测硬盘此时的状态是否正常。
 	if (reset) {
 		reset = 0;
 		recalibrate = 1;
@@ -324,7 +330,8 @@ void do_hd_request(void)
 		hd_out(dev,hd_info[CURRENT_DEV].sect,0,0,0,
 			WIN_RESTORE,&recal_intr);
 		return;
-	}	
+	}
+	//如果正常，针对命令的性质（读/写）给硬盘发送操作命令，
 	if (CURRENT->cmd == WRITE) {
 		hd_out(dev,nsect,sec,head,cyl,WIN_WRITE,&write_intr);
 		for(i=0 ; i<3000 && !(r=inb_p(HD_STATUS)&DRQ_STAT) ; i++)
@@ -335,15 +342,20 @@ void do_hd_request(void)
 		}
 		port_write(HD_DATA,CURRENT->buffer,256);
 	} else if (CURRENT->cmd == READ) {
-		hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr);
+		hd_out(dev,nsect,sec,head,cyl,WIN_READ,&read_intr);	//hd_out函数下达最后的硬盘操作指令
 	} else
 		panic("unknown hd-command");
 }
 
 void hd_init(void)
 {
-	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
+	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;	//将硬盘请求项服务程序do_rd_request与
+													//blk_dev控制结构相挂接
+	//将硬盘中断服务程序hd_interrupt与中断描述符表相挂接，进一步完善中断服务体系
 	set_intr_gate(0x2E,&hd_interrupt);
+
+	//复位主8259A int2的屏蔽位，允许从片发出中断请求信号；复位硬盘的中断请求屏蔽位（在从片上），
+	//允许硬盘控制器发送中断请求信号。
 	outb_p(inb_p(0x21)&0xfb,0x21);
 	outb(inb_p(0xA1)&0xbf,0xA1);
 }

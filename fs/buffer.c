@@ -35,9 +35,9 @@ int NR_BUFFERS = 0;
 
 static inline void wait_on_buffer(struct buffer_head * bh)
 {
-	cli();
-	while (bh->b_lock)
-		sleep_on(&bh->b_wait);
+	cli();			//关中断
+	while (bh->b_lock)		//判断刚才申请到的缓冲块是否被加锁
+		sleep_on(&bh->b_wait);		//将进程1挂起
 	sti();
 }
 
@@ -55,7 +55,7 @@ int sys_sync(void)
 	}
 	return 0;
 }
-
+//sync_dev函数会遍历整个缓冲区，将所有“脏”的缓冲块中的内容全部同步到硬盘上。
 int sync_dev(int dev)
 {
 	int i;
@@ -185,9 +185,9 @@ struct buffer_head * get_hash_table(int dev, int block)
 	struct buffer_head * bh;
 
 	for (;;) {
-		if (!(bh=find_buffer(dev,block)))
+		if (!(bh=find_buffer(dev,block)))	
 			return NULL;
-		bh->b_count++;
+		bh->b_count++;	//如果已有对应的同一个缓冲块，则将这个缓冲块的引用次数加1，以表示再次引用该缓冲块
 		wait_on_buffer(bh);
 		if (bh->b_dev == dev && bh->b_blocknr == block)
 			return bh;
@@ -208,12 +208,16 @@ struct buffer_head * getblk(int dev,int block)
 	struct buffer_head * tmp, * bh;
 
 repeat:
-	if (bh = get_hash_table(dev,block))
+	//逻辑块如果已经被注册在缓冲区管理结构中，则此次无须读盘，直接在缓冲区中就可以得到。
+	if (bh = get_hash_table(dev,block))		//通过哈希表结构找一下有没有哪个缓冲块中所对应的设备号和块号，
+											//与当前要找的那个逻辑块的块号和设备号相匹配
+											//能找到就直接用，但由于现在是第一次使用缓冲区，所以不可能存在。
 		return bh;
-	tmp = free_list;
+	tmp = free_list;						//只能在空闲链接中新申请一个合适的缓冲块
 	do {
-		if (tmp->b_count)
+		if (tmp->b_count)					//查找空闲链表
 			continue;
+		//通过BADNESS(tmp)来综合分析所有空闲缓冲块的状态。
 		if (!bh || BADNESS(tmp)<BADNESS(bh)) {
 			bh = tmp;
 			if (!BADNESS(tmp))
@@ -225,9 +229,13 @@ repeat:
 		sleep_on(&buffer_wait);
 		goto repeat;
 	}
+	//由于系统申请到的缓冲块是“加锁”的缓冲块，这就导致进程或系统不能立即与缓冲块进行数据交互，
+	//否则将产生数据混乱。于是，系统会直接调用wait_on_buff(bh);函数，进程将被挂起
 	wait_on_buffer(bh);
 	if (bh->b_count)
 		goto repeat;
+	//缓冲区中没有空闲且不脏的缓冲块。意味着要强行将缓冲区中的数据同步到硬盘，以便在缓冲区中突出更多的空间
+	//为后续的写盘工作提供支持
 	while (bh->b_dirt) {
 		sync_dev(bh->b_dev);
 		wait_on_buffer(bh);
@@ -236,18 +244,18 @@ repeat:
 	}
 /* NOTE!! While we slept waiting for this block, somebody else might */
 /* already have added "this" block to the cache. check it */
-	if (find_buffer(dev,block))
+	if (find_buffer(dev,block))			
 		goto repeat;
 /* OK, FINALLY we know that this buffer is the only one of it's kind, */
 /* and that it's unused (b_count=0), unlocked (b_lock=0), and clean */
-	bh->b_count=1;
+	bh->b_count=1;						//让设备号和块号与该缓冲块相对应，并把这个缓冲块挂接在哈希表结构中
 	bh->b_dirt=0;
 	bh->b_uptodate=0;
 	remove_from_queues(bh);
 	bh->b_dev=dev;
 	bh->b_blocknr=block;
 	insert_into_queues(bh);
-	return bh;
+	return bh;							//返回这个缓冲块指针
 }
 
 void brelse(struct buffer_head * buf)
@@ -268,12 +276,12 @@ struct buffer_head * bread(int dev,int block)
 {
 	struct buffer_head * bh;
 
-	if (!(bh=getblk(dev,block)))
+	if (!(bh=getblk(dev,block)))		//在缓冲区中申请一个缓冲块，
 		panic("bread: getblk returned NULL\n");
 	if (bh->b_uptodate)
 		return bh;
-	ll_rw_block(READ,bh);
-	wait_on_buffer(bh);
+	ll_rw_block(READ,bh);				//将缓冲块与请求项结构挂接。
+	wait_on_buffer(bh);					//将等待执行缓冲块解锁的进程挂起。
 	if (bh->b_uptodate)
 		return bh;
 	brelse(bh);
@@ -325,7 +333,7 @@ struct buffer_head * breada(int dev,int first, ...)
 	struct buffer_head * bh, *tmp;
 
 	va_start(args,first);
-	if (!(bh=getblk(dev,first)))
+	if (!(bh=getblk(dev,first)))		
 		panic("bread: getblk returned NULL\n");
 	if (!bh->b_uptodate)
 		ll_rw_block(READ,bh);
@@ -355,6 +363,7 @@ void buffer_init(long buffer_end)
 		b = (void *) (640*1024);
 	else
 		b = (void *) buffer_end;
+	//对空闲表进行设置，使之成为一个“双环链表”，其中的成员。。。等均被设置为0
 	while ( (b -= BLOCK_SIZE) >= ((void *) (h+1)) ) {
 		h->b_dev = 0;
 		h->b_dirt = 0;
@@ -376,6 +385,7 @@ void buffer_init(long buffer_end)
 	free_list = start_buffer;
 	free_list->b_prev_free = h;
 	h->b_next_free = free_list;
+	//对哈希表进行设置。
 	for (i=0;i<NR_HASH;i++)
 		hash_table[i]=NULL;
 }	

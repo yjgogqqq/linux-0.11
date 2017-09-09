@@ -20,8 +20,8 @@
  * won't be any messing with the stack from main(), but we define
  * some others too.
  */
-static inline _syscall0(int,fork)
-static inline _syscall0(int,pause)
+static inline _syscall0(int,fork)				//对fork函数的使用声明
+static inline _syscall0(int,pause)				//对pause函数的使用声明
 static inline _syscall1(int,setup,void *,BIOS)
 static inline _syscall0(int,sync)
 
@@ -109,6 +109,8 @@ void main(void)		/* This really IS void, no error here. */
  */
  	ROOT_DEV = ORIG_ROOT_DEV;
  	drive_info = DRIVE_INFO;
+	//先根据内存条大小对“缓冲区”和“主内存区”的位置和大小进行初步设定。分别针对内存条：大于16MB、
+	//大于12MB且小于等于16MB、大于6MB且小于等于12MB、小于等于6MB这四种情况进行设定。
 	memory_end = (1<<20) + (EXT_MEM_K<<10);
 	memory_end &= 0xfffff000;
 	if (memory_end > 16*1024*1024)
@@ -124,17 +126,26 @@ void main(void)		/* This really IS void, no error here. */
 	main_memory_start += rd_init(main_memory_start, RAMDISK*1024);
 #endif
 	mem_init(main_memory_start,memory_end);
-	trap_init();
-	blk_dev_init();
-	chr_dev_init();
-	tty_init();
-	time_init();
-	sched_init();
-	buffer_init(buffer_memory_end);
-	hd_init();
-	floppy_init();
-	sti();
+	trap_init();				//异常处理类中断服务程序挂接
+	blk_dev_init();				//块设备
+	chr_dev_init();				//字符设备
+	tty_init();					//与建立人机交互界面相关的外设的中断服务程序挂接
+	time_init();				//开机启动时间设置
+	sched_init();				//进程相关事务初始化
+	buffer_init(buffer_memory_end);		//初始化缓冲区管理结构
+										//缓冲区是内存与外设（块设备，如硬盘等）进行数据交互的媒介
+	hd_init();							//初始化硬盘
+	floppy_init();						//初始化软盘
+	//以上程序已将系统中所有中断服务程序都已经和中断描述符表正常挂接，这意味着中断服务体系已经构建完毕，
+	//系统可以在32位保护模式下处理中断信号了，所以要将中断开启。
+	sti();								//开中断
+	//在Linux 0.11中，除进程0外，所有进程都是由一个已有进程在用户态下完成创建的。为了遵守这个规则，
+	//在进程0正式创建进程1之前，要将进程0由内核态转变为用户态，方法是调用move_to_user_mode函数，
+	//模仿中断返回动作，实现进程0的特权级从内核态转变为用户态。
 	move_to_user_mode();
+	//调用fork函数，开始创建进程1，所有用户进程在创建新进程的时候都要调用这个函数
+	//fork（）函数通过系统调用创建一个与原来进程几乎完全相同的进程，
+	//就是两个进程可以做完全相同的事，但如果初始参数或者传入的变量不同，两个进程也可以做不同的事。
 	if (!fork()) {		/* we count on this going ok */
 		init();
 	}
@@ -170,9 +181,14 @@ void init(void)
 	int pid,i;
 
 	setup((void *) &drive_info);
-	(void) open("/dev/tty0",O_RDWR,0);
+	(void) open("/dev/tty0",O_RDWR,0);	//打开终端设备文件，实参“/dev/tty0”表明这个终端设备文件在根设备上的位置。
+
+	//进程1在tty0设备文件已经被打开的基础上复制文件句柄，一共进行了两次，第一次，系统先调用dup函数复制文件句柄。
+	//这个函数最终会对应到sys_dup这个系统调用函数中，并进一步调用到dupfd函数中。
 	(void) dup(0);
+	//第二次复制文件句柄，最终还会执行到dupfd函数中去操作，同样的代码，情况不同
 	(void) dup(0);
+	//至此，进程1具备了与外设以文件方式沟通的能力，并使用这种能力，与终端设备文件建立了3套关系。
 	printf("%d buffers = %d bytes buffer space\n\r",NR_BUFFERS,
 		NR_BUFFERS*BLOCK_SIZE);
 	printf("Free mem: %d bytes\n\r",memory_end-main_memory_start);
@@ -184,7 +200,7 @@ void init(void)
 		_exit(2);
 	}
 	if (pid>0)
-		while (pid != wait(&i))
+		while (pid != wait(&i))	//映射到系统调用函数sys_waitpid.
 			/* nothing */;
 	while (1) {
 		if ((pid=fork())<0) {

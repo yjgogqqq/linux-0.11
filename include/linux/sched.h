@@ -170,12 +170,13 @@ __asm__("str %%ax\n\t" \
  */
 #define switch_to(n) {\
 struct {long a,b;} __tmp; \
-__asm__("cmpl %%ecx,_current\n\t" \
-	"je 1f\n\t" \
-	"movw %%dx,%1\n\t" \
-	"xchgl %%ecx,_current\n\t" \
-	"ljmp %0\n\t" \
-	"cmpl %%ecx,_last_task_used_math\n\t" \
+__asm__("cmpl %%ecx,_current\n\t" \			//判断新的进程是否就是当前进程
+	"je 1f\n\t" \							//如果是，直接返回。
+	"movw %%dx,%1\n\t" \					//如果不是，将新进程TSS选择符存入临时结构变量
+	"xchgl %%ecx,_current\n\t" \			//将系统当前指针current修改为新进程
+	"ljmp %0\n\t" \							//使CPU各个寄存器的状态回填到原进程的tss中，再将新进程的tss中
+											//所有寄存器的值载至CPU的各个寄存器中（这是由硬件实现的）
+	"cmpl %%ecx,_last_task_used_math\n\t" \	//ecx存放原进程的task_struct指针
 	"jne 1f\n\t" \
 	"clts\n" \
 	"1:" \

@@ -52,7 +52,9 @@ void truncate(struct m_inode * inode)
 		return;
 	for (i=0;i<7;i++)
 		if (inode->i_zone[i]) {
-			free_block(inode->i_dev,inode->i_zone[i]);
+			//从硬盘上删除文件并不是真正将存储文件的数据块全部清0，而只是在位于高速缓冲区的逻辑块位图上
+			//将存储该文件的数据块标识为未使用即可，执行该操作的是free_block函数
+			free_block(inode->i_dev,inode->i_zone[i]); 
 			inode->i_zone[i]=0;
 		}
 	free_ind(inode->i_dev,inode->i_zone[7]);

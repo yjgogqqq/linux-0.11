@@ -103,7 +103,7 @@ extern inline void unlock_buffer(struct buffer_head * bh)
 	if (!bh->b_lock)
 		printk(DEVICE_NAME ": free buffer being unlocked\n");
 	bh->b_lock=0;
-	wake_up(&bh->b_wait);
+	wake_up(&bh->b_wait);//唤醒等待缓冲块解锁的进程，即设置为就绪状态
 }
 
 extern inline void end_request(int uptodate)
@@ -111,14 +111,14 @@ extern inline void end_request(int uptodate)
 	DEVICE_OFF(CURRENT->dev);
 	if (CURRENT->bh) {
 		CURRENT->bh->b_uptodate = uptodate;
-		unlock_buffer(CURRENT->bh);
+		unlock_buffer(CURRENT->bh);			//为缓冲块解锁
 	}
 	if (!uptodate) {
 		printk(DEVICE_NAME " I/O error\n\r");
 		printk("dev %04x, block %d\n\r",CURRENT->dev,
 			CURRENT->bh->b_blocknr);
 	}
-	wake_up(&CURRENT->waiting);
+	wake_up(&CURRENT->waiting);		//将等待这个缓冲块解锁的进程唤醒
 	wake_up(&wait_for_request);
 	CURRENT->dev = -1;
 	CURRENT = CURRENT->next;

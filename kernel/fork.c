@@ -36,6 +36,9 @@ void verify_area(void * addr,int size)
 	}
 }
 
+//为新建的用户进程在线性地址空间中指定一个位置，并将该位置与新建进程管理结构中的ldt[3]挂接。
+//这里对新建进程设置的线性地址范围是专供内核使用的，对普通用户程序而言，能够接触到的只有逻辑
+//地址，即在所有用户程序看来，它们的地址范围都是0~64MB这个空间内；
 int copy_mem(int nr,struct task_struct * p)
 {
 	unsigned long old_data_base,new_data_base,data_limit;
@@ -117,17 +120,26 @@ int copy_process(int nr,long ebp,long edi,long esi,long gs,long none,
 		free_page((long) p);
 		return -EAGAIN;
 	}
+
+	//进程管理结构的复制，致使创建的进程的*filp[20]结构里面也自然而然地存在着同样三套与tty0对应的关系，
+	//每一次复制都会导致tty0文件的引用次数f_count加1，因此tty0文件的引用次数将在循环中被连续三次加1。
 	for (i=0; i<NR_OPEN;i++)
 		if (f=p->filp[i])
 			f->f_count++;
+	//由于进程1在加载根文件系统时，已经将根i节点及由此而导致的进程1的当前进程工作目录i节点pwd和当前进程
+	//根目录的i节点root都对应到了“根i节点”上，所以，当前进程管理结构的复制，致使进程2中的pwd和root也对应
+	//到了根i节点上，因此根i节点的引用数i_count此时增加了两次。
 	if (current->pwd)
 		current->pwd->i_count++;
 	if (current->root)
 		current->root->i_count++;
+	//进程1并没有对应任何可执行文件，所以进程1所对应的“可执行文件的i节点”一定是空的。
 	if (current->executable)
 		current->executable->i_count++;
+	//将进程2（新进程）的局部描述符表和任务状态描述符表与全局描述符表进行挂接，
 	set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY,&(p->tss));
 	set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY,&(p->ldt));
+	//进程2现在已经具备了参与轮询的能力，于是将进程2的状态设置为就绪状态
 	p->state = TASK_RUNNING;	/* do this last, just in case */
 	return last_pid;
 }

@@ -155,6 +155,7 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 	unsigned long * from_dir, * to_dir;
 	unsigned long nr;
 
+	
 	if ((from&0x3fffff) || (to&0x3fffff))
 		panic("copy_page_tables called with wrong alignment");
 	from_dir = (unsigned long *) ((from>>20) & 0xffc); /* _pg_dir = 0 */
@@ -170,6 +171,9 @@ int copy_page_tables(unsigned long from,unsigned long to,long size)
 			return -1;	/* Out of memory, see freeing */
 		*to_dir = ((unsigned long) to_page_table) | 7;
 		nr = (from==0)?0xA0:1024;
+		//将父进程的页表项全部拷贝给子进程，页表项直接对应页面，所以这两个进程就共享页面了，
+		//于是系统将共享页面的引用计数加1，并将此共享页面全部设置为“只读”属性，即无论是父进程还是子进程，
+		//都只能对这些共享的页面进行读操作，而不能是写操作。
 		for ( ; nr-- > 0 ; from_page_table++,to_page_table++) {
 			this_page = *from_page_table;
 			if (!(1 & this_page))
@@ -218,22 +222,30 @@ unsigned long put_page(unsigned long page,unsigned long address)
 	return page;
 }
 
+//页写保护处理
 void un_wp_page(unsigned long * table_entry)
 {
 	unsigned long old_page,new_page;
 
 	old_page = 0xfffff000 & *table_entry;
-	if (old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==1) {
+	//原页面引用计数为1时，将原页面的属性设置为“可读可写”，然后函数返回
+	if (old_page >= LOW_MEM && mem_map[MAP_NR(old_page)]==1) {	
 		*table_entry |= 2;
 		invalidate();
 		return;
 	}
+	//在主内存中申请一个空闲页面（以后称之为新页面），以便备份刚才压栈的位置所在的页面（之后称为原页面）
+	//的全部数据，然后将原页面的引用计数减1，这是因为，原页面中的数据即将要备份到新页面中了，进程A也将要
+	//到新页面中操作数据，而不再需要与原页面维持关系，所以原页面的引用计数减1.
 	if (!(new_page=get_free_page()))
 		oom();
 	if (old_page >= LOW_MEM)
 		mem_map[MAP_NR(old_page)]--;
+	//将进程A的页表中指向原页面的页表项改为指向新页面，并将其使用的属性从“只读”改变为“可读可写”，这样
+	//进程A才具备了在新页面中处理数据的能力
 	*table_entry = new_page | 7;
 	invalidate();
+	//将原页面中的内容拷贝到新页面中。
 	copy_page(old_page,new_page);
 }	
 
@@ -275,6 +287,7 @@ void get_empty_page(unsigned long address)
 {
 	unsigned long tmp;
 
+	//新申请缺少的页面，并将这个物理页面映射到str1的线性地址空间内
 	if (!(tmp=get_free_page()) || !put_page(tmp,address)) {
 		free_page(tmp);		/* 0 is ok - ignored */
 		oom();
@@ -367,30 +380,43 @@ void do_no_page(unsigned long error_code,unsigned long address)
 	int nr[4];
 	unsigned long tmp;
 	unsigned long page;
-	int block,i;
+	int block,i;	
 
+	//判断是否确实需要把外设上的内容拷贝进新申请的内存页面中去。
 	address &= 0xfffff000;
 	tmp = address - current->start_code;
+	//判断进程是否已经把程序加载进来，或者产生缺页中断的线性地址值是否已经超出了程序代码的末端
 	if (!current->executable || tmp >= current->end_data) {
 		get_empty_page(address);
 		return;
 	}
+	//share_page函数来判断是否有可能让当前进程与另一个进程共享同一个程序，如果能够共享，
+	//就不用再从外设上重新载入代码了。
 	if (share_page(tmp))
 		return;
-	if (!(page = get_free_page()))
+	if (!(page = get_free_page()))	//申请内存页面，如果内存不够用，则当前进程退出。
 		oom();
 /* remember that 1 block is used for header */
 	block = 1 + tmp/BLOCK_SIZE;
+	//因为一个页面的大小为4KB,所以一次缺页中断发生就要把4KB大小的程序内容读进这个页面中。
+	//调用bmap函数，根据程序的i节点提供的信息，读取数据块在设备上对应的所有逻辑块号（一共
+	//4个，必须全部读取出来）
 	for (i=0 ; i<4 ; block++,i++)
 		nr[i] = bmap(current->executable,block);
+	//从虚拟盘上把nr[4]指定的4个程序逻辑块载入缓冲区，并最终复制到内存的指定空间内。
 	bread_page(page,current->executable->i_dev,nr);
+
+	//如果加载进内存的程序内容小于一个页面，就将页面中剩余的空间清0，这部分空间在程序执行起来
+	//（比如压栈）有可能会用到
 	i = tmp + 4096 - current->end_data;
 	tmp = page + 4096;
 	while (i-- > 0) {
 		tmp--;
 		*(char *)tmp = 0;
 	}
-	if (put_page(page,address))
+	//将程序内容所在的物理页面映射到线性地址空间内。在此过程中，线性地址将被执行“页目录项”、“页表”、
+	//“页面”这三级解析，使线性地址和物理地址建立关系。
+	if (put_page(page,address))	
 		return;
 	free_page(page);
 	oom();

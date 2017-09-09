@@ -43,7 +43,7 @@ void show_stat(void)
 			show_task(i,task[i]);
 }
 
-#define LATCH (1193180/HZ)
+#define LATCH (1193180/HZ)				//表明系统将每10ms发生一次时钟中断。
 
 extern void mem_use(void);
 
@@ -101,26 +101,30 @@ void math_state_restore()
  * tasks can run. It can not be killed, and it cannot sleep. The 'state'
  * information in task[0] is never used.
  */
-void schedule(void)
+void schedule(void)				
 {
 	int i,next,c;
 	struct task_struct ** p;
 
 /* check alarm, wake up any interruptible tasks that have got a signal */
-
+	//从进程槽task[64]数组的末端开始扫描当前系统中已存在的进程（进程0除外）是否启用了报警器（alarm）
+	//该报警器的意思是当到达某个时间点时内核给进程发送一个报警信号（SIGALRM）。内核可以检测报警器的
+	//数值，唤醒进程。用户进程调用sleep就是通过设置报警器，使自己可以在一定时间后被内核唤醒运行。
 	for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 		if (*p) {
-			if ((*p)->alarm && (*p)->alarm < jiffies) {
+			if ((*p)->alarm && (*p)->alarm < jiffies) {	//针对报警定时值进行处理
 					(*p)->signal |= (1<<(SIGALRM-1));
 					(*p)->alarm = 0;
 				}
+			//如果遍历到的进程在信号位图上有信号被置们，而且处于可中断等待状态，系统就把它改设为就绪状态
 			if (((*p)->signal & ~(_BLOCKABLE & (*p)->blocked)) &&
 			(*p)->state==TASK_INTERRUPTIBLE)
 				(*p)->state=TASK_RUNNING;
 		}
 
 /* this is the scheduler proper: */
-
+	//开始遍历，内核通过while循环来选择一个合适的进程投入运行。从task数组末端开始遍历每个处于就绪状态且
+	//当前剩余时间片（counter）最大的进程。
 	while (1) {
 		c = -1;
 		next = 0;
@@ -129,10 +133,16 @@ void schedule(void)
 		while (--i) {
 			if (!*--p)
 				continue;
-			if ((*p)->state == TASK_RUNNING && (*p)->counter > c)
+			if ((*p)->state == TASK_RUNNING && (*p)->counter > c) //判断此时需要切换到哪个进程去执行，
+																	////进程切换的条件是，时间片要有剩余且必须是就绪状态，两者要同时满足
 				c = (*p)->counter, next = i;
-		}
+		}	//遍历结束后，c的值如果仍然是-1，则next仍然是0，这个next就是要切换到进程的进程号
+			//可见，如果没有合适的进程，next的数值将永远是0，那么就会默认切换到进程0中去执行。
 		if (c) break;
+		//当前进程时间片为0，其他进程又都不是就绪态，则重新分配时间片
+		//内核从task数组的末端开始重新给当前系统的所有进程（包括处于睡眠的进程，但进程0除外）分配时间片。
+		//时间片的大小为：counter/2+priority.priority是进程的优先级，所以进程的优先级越高（priority值越大），
+		//分配到的时间片就越多。然后根据此时时间片的情况重新选择进程运行，如此反复进行
 		for(p = &LAST_TASK ; p > &FIRST_TASK ; --p)
 			if (*p)
 				(*p)->counter = ((*p)->counter >> 1) +
@@ -158,10 +168,10 @@ void sleep_on(struct task_struct **p)
 		panic("task[0] trying to sleep");
 	tmp = *p;
 	*p = current;
-	current->state = TASK_UNINTERRUPTIBLE;
-	schedule();
+	current->state = TASK_UNINTERRUPTIBLE;		//将进程1设置为不可中断等待状态，进程1挂起
+	schedule();		//准备进程切换
 	if (tmp)
-		tmp->state=0;
+		tmp->state=0;	
 }
 
 void interruptible_sleep_on(struct task_struct **p)
@@ -307,6 +317,7 @@ void do_timer(long cpl)
 	extern int beepcount;
 	extern void sysbeepstop(void);
 
+	//内核会递减当前进程的时间片，每次减1，但只有当时间片递减到0时，才有可能从当前进程切换到其他进程
 	if (beepcount)
 		if (!--beepcount)
 			sysbeepstop();
@@ -389,8 +400,17 @@ void sched_init(void)
 
 	if (sizeof(struct sigaction) != 16)
 		panic("Struct sigaction MUST be 16 bytes");
-	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));
+
+	//将进程0的管理结构中的数据结构与全局描述符表相连接，并对全局描述符表、
+	//进程槽以及与进程调度相关的寄存器进行初始化设置，这样才能将进程0激活，
+	//使进程0具备运算及创建其他进程的能力。
+
+	//把“任务状态描述符表”和“局部数据描述符表”挂接到全局描述符表GDT中
+	set_tss_desc(gdt+FIRST_TSS_ENTRY,&(init_task.task.tss));	
 	set_ldt_desc(gdt+FIRST_LDT_ENTRY,&(init_task.task.ldt));
+
+	//对全局描述符表GDT和进程管理结构task[64]中除了与进程0相关的位置外，
+	//全部进行清空设置
 	p = gdt+2+FIRST_TSS_ENTRY;
 	for(i=1;i<NR_TASKS;i++) {
 		task[i] = NULL;
@@ -401,12 +421,30 @@ void sched_init(void)
 	}
 /* Clear NT, so that we won't have troubles with that later on */
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
+
+	//将全局描述符表中关于进程0的“任务状态描述符”和“局部数据描述符”
+	//分别记录在CPU中的“任务状态描述符”和“局部数据描述符”中
 	ltr(0);
 	lldt(0);
+	//上面已经设置好了与进程0相关的管理结构
+	
+	//对时钟中断进行设置，时钟中断是进程0及其他由它创建的进程轮询的基础。
+
+	//对支持轮询的8253定时器进行设置
+	//其中LATCH最关键，它的定义“#define LATCH (1193180/HZ)”，
+	//表明系统将每10ms发生一次时钟中断。
 	outb_p(0x36,0x43);		/* binary, mode 3, LSB/MSB, ch 0 */
 	outb_p(LATCH & 0xff , 0x40);	/* LSB */
 	outb(LATCH >> 8 , 0x40);	/* MSB */
+	//对与轮询相关的服务程序进行设置
+	//timer_interrupt函数挂接后，在发生时钟中断时，系统就可以通过中断描述符表找到
+	//这个服务程序来进行具体的处理，这个程序的挂接也是保护模式下重建中断服务体系的一部分
 	set_intr_gate(0x20,&timer_interrupt);
+	//将8259A芯片中与时钟中断相关的屏蔽码打开。打开后，时钟中断就可以产生了，从现在开始，
+	//时钟中断每10ms就产生一次。由于此时处于“关中断”状态，所以这些产生的信号并不响应，但
+	//进程0已经具备参与进程轮询的能力。
 	outb(inb_p(0x21)&~0x01,0x21);
-	set_system_gate(0x80,&system_call);
+	//system_call是整个操作系统中系统调用软中断的总入口，所有用户程序产生了系统调用软中断后，
+	//系统都是通过这个总入口进一步找到具体的系统调用函数的，
+	set_system_gate(0x80,&system_call);			//将system_call与中断描述符表相挂接
 }

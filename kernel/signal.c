@@ -49,14 +49,18 @@ int sys_signal(int signum, long handler, long restorer)
 {
 	struct sigaction tmp;
 
+	//检测用户指定的信号是否合理
 	if (signum<1 || signum>32 || signum==SIGKILL)
 		return -1;
-	tmp.sa_handler = (void (*)(int)) handler;
+	//开始对进程管理结构中的sigaction[32]结构进行设置
+	tmp.sa_handler = (void (*)(int)) handler;	//这行代码实施了绑定工作，handler参数就是进程中
+												//"signal(SIGUSR1,sig_usr)"这行代码的sig_usr函数的地址，
+												//该设置意味着，只要将来进程接到信号，就由sig_usr这个函数来处理
 	tmp.sa_mask = 0;
 	tmp.sa_flags = SA_ONESHOT | SA_NOMASK;
 	tmp.sa_restorer = (void (*)(void)) restorer;
 	handler = (long) current->sigaction[signum-1].sa_handler;
-	current->sigaction[signum-1] = tmp;
+	current->sigaction[signum-1] = tmp;	//这行代码确定了将由sigaction[signum-1]这一项为SIGUSR1信号提供服务
 	return handler;
 }
 
@@ -90,6 +94,7 @@ void do_signal(long signr,long eax, long ebx, long ecx, long edx,
 	int longs;
 	unsigned long * tmp_esp;
 
+	//
 	sa_handler = (unsigned long) sa->sa_handler;
 	if (sa_handler==1)
 		return;
@@ -99,11 +104,13 @@ void do_signal(long signr,long eax, long ebx, long ecx, long edx,
 		else
 			do_exit(1<<(signr-1));
 	}
+	//修改内核栈和用户栈的过程
 	if (sa->sa_flags & SA_ONESHOT)
 		sa->sa_handler = NULL;
-	*(&eip) = sa_handler;
+	*(&eip) = sa_handler;	//这一行是在系统调用返回后对eip位置的调整，使其指向processig进程的信号处理函数sig_usr
 	longs = (sa->sa_flags & SA_NOMASK)?7:8;
-	*(&esp) -= longs;
+	*(&esp) -= longs;	//这一行是对“用户栈”空间的栈顶指针esp进行调整，使栈顶指针向栈底的反方向移动，以便接下来
+						//在用户栈空间中备份数据
 	verify_area(esp,longs*4);
 	tmp_esp=esp;
 	put_fs_long((long) sa->sa_restorer,tmp_esp++);

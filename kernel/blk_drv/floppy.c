@@ -456,7 +456,9 @@ void do_fd_request(void)
 
 void floppy_init(void)
 {
-	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;
-	set_trap_gate(0x26,&floppy_interrupt);
-	outb(inb_p(0x21)&~0x40,0x21);
+	blk_dev[MAJOR_NR].request_fn = DEVICE_REQUEST;	//将软盘请求项服务程序do_fd_request与blk_dev控制结构相挂接
+	set_trap_gate(0x26,&floppy_interrupt);			//将软盘中断服务程序floppy_interrupt与中断描述符表相挂接，
+													//这是构建32位保护模式中断服务体系的最后一步，这一步的完成
+													//标志着linux0.11保护模式下的中断服务体系彻底构建完毕了。
+	outb(inb_p(0x21)&~0x40,0x21);					//复位软盘的中断请求屏蔽位，允许软盘控制器发送中断请求信号。
 }

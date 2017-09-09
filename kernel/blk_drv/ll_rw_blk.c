@@ -72,7 +72,7 @@ static void add_request(struct blk_dev_struct * dev, struct request * req)
 	if (!(tmp = dev->current_request)) {
 		dev->current_request = req;
 		sti();
-		(dev->request_fn)();
+		(dev->request_fn)();		//调用硬盘请求项处理函数去给硬盘发送具体的读盘命令；即调用do_hd_request函数
 		return;
 	}
 	for ( ; tmp->next ; tmp=tmp->next)
@@ -102,7 +102,8 @@ static void make_request(int major,int rw, struct buffer_head * bh)
 	}
 	if (rw!=READ && rw!=WRITE)
 		panic("Bad block dev command, must be R/W/RA/WA");
-	lock_buffer(bh);
+	lock_buffer(bh);				//将这个缓冲块加锁，目的是让这个缓冲块在解锁之前将不再被操作。
+									//因为这个缓冲块现在已经被使用，如果此时它再被用于它途，这里面的数据就会发生混乱
 	if ((rw == WRITE && !bh->b_dirt) || (rw == READ && bh->b_uptodate)) {
 		unlock_buffer(bh);
 		return;
@@ -113,23 +114,25 @@ repeat:
  * of the requests are only for reads.
  */
 	if (rw == READ)
-		req = request+NR_REQUEST;
+		req = request+NR_REQUEST;			//如果是读请求，则从整个请求项结构的最未端开始寻找空闲请求项
 	else
-		req = request+((NR_REQUEST*2)/3);
+		req = request+((NR_REQUEST*2)/3);	//如果是写请求，则从整个结构的三分之二处申请空闲请求项。
 /* find an empty request */
 	while (--req >= request)
 		if (req->dev<0)
 			break;
 /* if none found, sleep on new requests: check for rw_ahead */
+	//如果最后没有找到合适的空闲请求项，就将当前进程挂起
 	if (req < request) {
 		if (rw_ahead) {
 			unlock_buffer(bh);
 			return;
 		}
-		sleep_on(&wait_for_request);
+		sleep_on(&wait_for_request);	//挂起进程
 		goto repeat;
 	}
 /* fill up the request-info, and add it to the queue */
+	//缓冲块与请求项正式挂接，对这个请求项各个成员进行初始化。
 	req->dev = bh->b_dev;
 	req->cmd = rw;
 	req->errors=0;
@@ -139,19 +142,19 @@ repeat:
 	req->waiting = NULL;
 	req->bh = bh;
 	req->next = NULL;
-	add_request(major+blk_dev,req);
+	add_request(major+blk_dev,req);		//往请求项队列中加载该请求项
 }
 
 void ll_rw_block(int rw, struct buffer_head * bh)
 {
 	unsigned int major;
 
-	if ((major=MAJOR(bh->b_dev)) >= NR_BLK_DEV ||
-	!(blk_dev[major].request_fn)) {
+	if ((major=MAJOR(bh->b_dev)) >= NR_BLK_DEV ||	//判断缓冲块对应的设备是否存在
+	!(blk_dev[major].request_fn)) {					//以及这个设备的请求项函数是否挂接正常。
 		printk("Trying to read nonexistent block-device\n\r");
 		return;
 	}
-	make_request(major,rw,bh);
+	make_request(major,rw,bh);					//将缓冲块与请求项建立关系。
 }
 
 void blk_dev_init(void)
@@ -159,7 +162,8 @@ void blk_dev_init(void)
 	int i;
 
 	for (i=0 ; i<NR_REQUEST ; i++) {
-		request[i].dev = -1;
-		request[i].next = NULL;
+		request[i].dev = -1;			//说明这个请求项还没有具体对应哪个设备，
+										//此标志用于判断对应该请求项的当前设备是否空闲
+		request[i].next = NULL;			//说明这个请求项还没有与请求项队列进行挂接。
 	}
 }

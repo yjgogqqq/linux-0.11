@@ -13,14 +13,26 @@
  */
 .text
 .globl _idt,_gdt,_pg_dir,_tmp_floppy_area
-_pg_dir:
+_pg_dir:                        #用于标识内核分页机制完成后的内核起始位置
+				#也就是物理内存的起始位置0x000000.
+				#head程序马上就要在此处建立页目录表，为分页机制做准备。
 startup_32:
-	movl $0x10,%eax
-	mov %ax,%ds
+	movl $0x10,%eax		#eax比ax多了一个字母e，这是为适应保护模式而做的调整。
+	mov %ax,%ds		#将DS,ES,FS,GS,等其他寄存器从实模式转变到保护模式。
 	mov %ax,%es
 	mov %ax,%fs
-	mov %ax,%gs
-	lss _stack_start,%esp
+	mov %ax,%gs		#DS,ES,FS,GS中的值都变成为0x10
+				#与前面提到的jmpi 0,8中的8分析方法相同，
+				#0x10应看成二进制的0001 0000，最后三位与前面讲解一样，
+				#其中最后两位的00表示内核特权极、第3位的0表示选择GDT表，
+				#第4、5两位的10是GDT表的2项，
+				#也就是说，4个寄存器用的是同一个全局描述符，它们的段基址、段限长和特权级都是相同的。
+	lss _stack_start,%esp	#SS现在也要转变为栈段选择符，栈顶指针也成为32位的esp
+				#在kernel/sched.c中，stack_start={&user_stack[PAGE_SIZE>>2],0x10}
+				#这行代码将栈顶指针指向user_stack数据结构的最末位置，
+				#0x10将SS的值设置为与前面4个段选择符的值相同。这样，ss与前面讲解过的4个段选择符相同，段基址都指向0x000000,
+				#段限长都是8MB，特权级都是内核特权级，后面的压栈动作就要在这里进行。
+				
 	call setup_idt
 	call setup_gdt
 	movl $0x10,%eax		# reload all the segment registers
@@ -196,10 +208,12 @@ ignore_int:
  */
 .align 2
 setup_paging:
+	/*将内核的页目录表和页表所占的空间清0*/
 	movl $1024*5,%ecx		/* 5 pages - pg_dir+4 page tables */
 	xorl %eax,%eax
 	xorl %edi,%edi			/* pg_dir is at 0x000 */
 	cld;rep;stosl
+	/*先设置页目录表中前4项的页面地址，内容分别为0x1000、0x2000、0x3000、0x4000*/
 	movl $pg0+7,_pg_dir		/* set present bit/user r/w */
 	movl $pg1+7,_pg_dir+4		/*  --------- " " --------- */
 	movl $pg2+7,_pg_dir+8		/*  --------- " " --------- */
@@ -230,7 +244,7 @@ gdt_descr:
 
 	.align 3
 _idt:	.fill 256,8,0		# idt is uninitialized
-
+/*以下代码决定了内核的段限长是16MB*/
 _gdt:	.quad 0x0000000000000000	/* NULL descriptor */
 	.quad 0x00c09a0000000fff	/* 16Mb */
 	.quad 0x00c0920000000fff	/* 16Mb */
